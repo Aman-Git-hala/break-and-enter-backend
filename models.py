@@ -53,4 +53,3 @@ class ClaimVerification(db.Model): # actual tablename is Claim_verification
     __table_args__ = (
     db.UniqueConstraint("claim_id", "platform_id"),
     )
-

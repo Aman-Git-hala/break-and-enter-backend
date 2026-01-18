@@ -455,6 +455,7 @@ def update_profile():
 
     return jsonify({"message": "Profile updated successfully"})
 
+
 # creating the database columns if not exist 
 # with app.app_context():
 #     db.create_all()
