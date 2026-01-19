@@ -9,7 +9,6 @@ import docx
 import json
 import requests
 from requests.exceptions import Timeout, RequestException
-from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS
 from flask_cors import CORS
 import fitz
 from flask_migrate import Migrate
@@ -17,17 +16,17 @@ from flask_migrate import Migrate
 DEMO_MODE = True 
 
 app = Flask(__name__)
-# Allow CORS for your React Frontend
 # Allow ALL origins (Vercel, Localhost, etc.)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Ensure upload folder exists
+# Ensure upload folder exists with absolute path
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = SQLALCHEMY_TRACK_MODIFICATIONS
+# --- FIX: DEFINE CONFIG DIRECTLY HERE (Removed config.py import) ---
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///site.db"
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.secret_key = "super_secret_key_for_hackathon"
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
@@ -177,8 +176,8 @@ def dashboard():
     if "user_id" not in session: return jsonify({"error": "Unauthorized"}), 401
     return jsonify({"message": "Welcome to Dashboard"})
 
-@app.route("/analyze", methods=["POST"])
-def analyze_resume():
+@app.route("/parse_resume", methods=["POST"])
+def parse_resume_endpoint():
     if DEMO_MODE and "user_id" not in session:
         user = get_or_create_demo_user()
         session["user_id"] = user.user_id
@@ -188,6 +187,7 @@ def analyze_resume():
 
     filename = secure_filename(resume_file.filename)
     path = os.path.join(UPLOAD_FOLDER, filename)
+    
     try:
         resume_file.save(path)
     except Exception as e:
@@ -198,18 +198,34 @@ def analyze_resume():
     db.session.add(resume)
     db.session.commit()
 
-    # 1. Parse Resume
     parsed_data = parse_resume(path)
-    extracted_skills = parsed_data["skills"]
-    github_username = parsed_data["github_username"] or "Vishalfot" 
+    
+    return jsonify({
+        "message": "Parsed successfully",
+        "profile": {
+            "user": parsed_data["github_username"] or "Vishalfot",
+            "email": parsed_data["email"],
+            "phone": parsed_data["phone"],
+            "education": parsed_data["education"],
+            "experience": parsed_data["experience"],
+            "projects": parsed_data["projects"],
+            "skills_found": parsed_data["skills"]
+        }
+    })
 
-    # 2. Call AI
+@app.route("/analyze_skills", methods=["POST"])
+def analyze_skills():
+    data = request.json
+    github_username = data.get("github_username")
+    skills = data.get("skills")
+    
+    if not github_username or not skills: return jsonify({"error": "Missing data"}), 400
+
     ai_url = "https://ror-12-skill-engine.hf.space/analyze/github"
-    payload = { "github_username": github_username, "skills": extracted_skills }
+    payload = { "github_username": github_username, "skills": skills }
     final_ml_results = {}
 
     try:
-        print(f"Calling AI for {github_username}...")
         ai_response = requests.post(ai_url, json=payload, timeout=300)
         ai_response.raise_for_status()
 
@@ -228,29 +244,12 @@ def analyze_resume():
 
     except Exception as e:
         print(f"AI Error: {e}")
-        # Don't crash, just return empty skills so profile still shows
-        final_ml_results = {} 
+        return jsonify({"error": "AI Engine failed", "details": str(e)}), 500
 
-    # 3. Final Response (Profile + AI Results)
-    final_response = {
-        "message": "Resume analyzed successfully",
+    return jsonify({
         "platform": "GitHub",
-        "response": final_ml_results,
-        "parsed_profile": {
-            "user": github_username,
-            "email": parsed_data["email"],
-            "phone": parsed_data["phone"],
-            "education": parsed_data["education"],
-            "experience": parsed_data["experience"],
-            "projects": parsed_data["projects"],
-            "skills_found": extracted_skills
-        }
-    }
-    
-    resume.analysis_json = final_response
-    db.session.commit()
-
-    return jsonify(final_response), 200
+        "response": final_ml_results
+    })
 
 if __name__ == "__main__":
     with app.app_context():
