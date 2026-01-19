@@ -18,7 +18,8 @@ DEMO_MODE = True
 
 app = Flask(__name__)
 # Allow CORS for your React Frontend
-CORS(app, supports_credentials=True, origins=["http://localhost:5173"]) 
+# Allow ALL origins (Vercel, Localhost, etc.)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Ensure upload folder exists
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
