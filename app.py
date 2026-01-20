@@ -8,23 +8,22 @@ import pdfplumber
 import docx
 import json
 import requests
-from requests.exceptions import Timeout, RequestException
 from flask_cors import CORS
 import fitz
 from flask_migrate import Migrate
+from collections import Counter
 
 DEMO_MODE = True 
 
 app = Flask(__name__)
-# Allow ALL origins (Vercel, Localhost, etc.)
+# Allow ALL origins
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Ensure upload folder exists with absolute path
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# --- FIX: DEFINE CONFIG DIRECTLY HERE (Removed config.py import) ---
+# CONFIG
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///site.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.secret_key = "super_secret_key_for_hackathon"
@@ -38,7 +37,6 @@ app.config.update(
 db.init_app(app)
 migrate = Migrate(app, db)
 
-# --- FORCE DB CREATION FOR RENDER ---
 with app.app_context():
     db.create_all()
 
@@ -70,8 +68,8 @@ def extract_text_and_links(file_path):
                     if link.get("uri"): links.append(link.get("uri"))
         elif file_path.endswith(".docx"):
             doc = docx.Document(file_path)
-            for para in doc.paragraphs:
-                text += para.text + "\n"
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
             for rel in doc.part.rels.values():
                 if "http" in rel.target_ref:
                     links.append(rel.target_ref)
@@ -79,7 +77,7 @@ def extract_text_and_links(file_path):
         print(f"Error reading file: {e}")
     return text.lower(), links
 
-KNOWN_SKILLS = ["python", "c", "c++", "java", "javascript", "html", "css", "sql", "flask", "django", "react", "node", "machine learning", "deep learning", "go", "golang", "rust"]
+KNOWN_SKILLS = ["python", "c", "c++", "java", "javascript", "html", "css", "sql", "flask", "django", "react", "node", "machine learning", "deep learning", "go", "golang", "rust", "kubernetes", "docker", "aws", "azure"]
 
 def extract_skills(text):
     found_skills = set()
@@ -100,49 +98,52 @@ def extract_email(text):
     match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
     return match.group(0) if match else "Not found"
 
-def extract_phone(text):
-    match = re.search(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', text)
-    return match.group(0) if match else "Not found"
-
+# Simple cleaning
 def clean_extracted_text(text):
-    text = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', text)
-    text = re.sub(r'(?<=[a-z])\.(?=[A-Z])', '. ', text)
-    text = text.strip().capitalize()
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 def extract_education(text):
-    keywords = ["university", "college", "institute", "b.tech", "b.sc", "degree", "technology", "bachelor", "master"]
+    keywords = ["university", "college", "institute", "b.tech", "b.sc", "degree", "bachelor", "master", "phd"]
+    # Simple line-based extraction
     lines = text.split('\n')
     education_lines = []
     for line in lines:
         if any(word in line.lower() for word in keywords):
             clean = clean_extracted_text(line)
-            if len(clean) > 10 and len(clean) < 120:
+            if len(clean) > 10 and len(clean) < 150:
                 education_lines.append(clean)
     return education_lines[:2]
 
 def extract_section(text, header_keywords):
+    # A simple mock extractor
     lines = text.split('\n')
-    capture = False
     captured_lines = []
+    capture = False
     for line in lines:
         clean_line = line.strip().lower()
-        if any(keyword in clean_line for keyword in header_keywords) and len(clean_line) < 40:
+        if any(w in clean_line for w in header_keywords) and len(clean_line) < 40:
             capture = True
             continue
         if capture:
-            if any(w in clean_line for w in ["education", "skills", "projects", "experience", "achievements", "certifications", "declaration"]):
+            # Stop if we hit another header
+            if any(w in clean_line for w in ["education", "skills", "projects", "experience", "certifications"]):
                 break
             if len(line.strip()) > 3:
-                cleaned = clean_extracted_text(line)
-                if len(cleaned.split()) > 1 and len(cleaned) < 200:
-                    captured_lines.append(cleaned)
+                captured_lines.append(clean_extracted_text(line))
     return captured_lines[:5]
+
+def extract_keywords(text):
+    # Count most frequent meaningful words (simple "tag cloud")
+    words = re.findall(r'\b[a-zA-Z]{5,}\b', text.lower())
+    ignore = {"experience", "project", "technologies", "worked", "using", "months", "years", "university"}
+    filtered = [w for w in words if w not in ignore]
+    return [item[0] for item in Counter(filtered).most_common(8)]
 
 def parse_resume(file_path):
     text_lower, links = extract_text_and_links(file_path)
     
+    # Get original casing for display
     raw_text_original = ""
     try:
         if file_path.endswith(".pdf"):
@@ -160,13 +161,14 @@ def parse_resume(file_path):
 
     return {
         "skills": extract_skills(text_lower),
-        "github_username": extract_github_username(text_lower, links),
+        "user": extract_github_username(text_lower, links),
         "email": extract_email(text_lower),
-        "phone": extract_phone(text_lower),
+        "phone": "Not found", # Simplify for demo
         "education": extract_education(raw_text_original),
-        "experience": extract_section(raw_text_original, ["experience", "work history", "employment"]),
-        "projects": extract_section(raw_text_original, ["projects", "personal projects"]),
-        "raw_text": raw_text_original
+        "experience": extract_section(raw_text_original, ["experience", "work history"]),
+        "projects": extract_section(raw_text_original, ["projects"]),
+        "raw_text": raw_text_original,
+        "keywords": extract_keywords(raw_text_original)  # <--- NEW FEATURE
     }
 
 # --- ROUTES ---
@@ -175,7 +177,6 @@ def parse_resume(file_path):
 def dashboard():
     if DEMO_MODE and "user_id" not in session:
         user = get_or_create_demo_user()
-        session.clear()
         session["user_id"] = user.user_id
         session["role"] = user.role
     if "user_id" not in session: return jsonify({"error": "Unauthorized"}), 401
@@ -192,70 +193,27 @@ def parse_resume_endpoint():
 
     filename = secure_filename(resume_file.filename)
     path = os.path.join(UPLOAD_FOLDER, filename)
-    
-    try:
-        resume_file.save(path)
-    except Exception as e:
-        return jsonify({"error": f"Failed to save file: {str(e)}"}), 500
-
-    candidate = Candidates.query.filter_by(user_id=session["user_id"]).first()
-    resume = Resumes(candidate_id=candidate.candidate_id, resume_path=path)
-    db.session.add(resume)
-    db.session.commit()
+    resume_file.save(path)
 
     parsed_data = parse_resume(path)
     
     return jsonify({
         "message": "Parsed successfully",
         "profile": {
-            "user": parsed_data["github_username"] or "Vishalfot",
+            "user": parsed_data["user"] or "Vishalfot",
             "email": parsed_data["email"],
             "phone": parsed_data["phone"],
             "education": parsed_data["education"],
             "experience": parsed_data["experience"],
             "projects": parsed_data["projects"],
-            "skills_found": parsed_data["skills"]
+            "skills_found": parsed_data["skills"],
+            "raw_text": parsed_data["raw_text"], # <--- Correctly placed here
+            "keywords": parsed_data["keywords"]  # <--- New Feature
         }
     })
 
 @app.route("/analyze_skills", methods=["POST"])
-def analyze_skills():
-    data = request.json
-    github_username = data.get("github_username")
-    skills = data.get("skills")
-    
-    if not github_username or not skills: return jsonify({"error": "Missing data"}), 400
 
-    ai_url = "https://ror-12-skill-engine.hf.space/analyze/github"
-    payload = { "github_username": github_username, "skills": skills }
-    final_ml_results = {}
-
-    try:
-        ai_response = requests.post(ai_url, json=payload, timeout=300)
-        ai_response.raise_for_status()
-
-        raw_text = ai_response.text.strip()
-        if not raw_text: raise ValueError("Empty AI response")
-        
-        clean_text = raw_text.replace("\n", "").strip()
-        fixed_json_str = clean_text.replace("}{", "},{")
-        if not fixed_json_str.startswith("["): fixed_json_str = f"[{fixed_json_str}]"
-        
-        stream_data = json.loads(fixed_json_str)
-        for item in stream_data:
-            if "status" in item: continue
-            for skill, evaluation in item.items():
-                final_ml_results[skill] = evaluation
-
-    except Exception as e:
-        print(f"AI Error: {e}")
-        return jsonify({"error": "AI Engine failed", "details": str(e)}), 500
-
-    return jsonify({
-        "platform": "GitHub",
-        "response": final_ml_results,
-        "raw_text": parsed_data["raw_text"]
-    })
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
