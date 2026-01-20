@@ -165,7 +165,8 @@ def parse_resume(file_path):
         "phone": extract_phone(text_lower),
         "education": extract_education(raw_text_original),
         "experience": extract_section(raw_text_original, ["experience", "work history", "employment"]),
-        "projects": extract_section(raw_text_original, ["projects", "personal projects"])
+        "projects": extract_section(raw_text_original, ["projects", "personal projects"]),
+        "raw_text": raw_text_original
     }
 
 # --- ROUTES ---
@@ -252,7 +253,8 @@ def analyze_skills():
 
     return jsonify({
         "platform": "GitHub",
-        "response": final_ml_results
+        "response": final_ml_results,
+        "raw_text": parsed_data["raw_text"]
     })
 
 if __name__ == "__main__":
