@@ -212,7 +212,7 @@ def parse_resume_endpoint():
         }
     })
 
-@app.route("/analyze_skills", methods=["POST"])
+
 
 
 if __name__ == "__main__":
